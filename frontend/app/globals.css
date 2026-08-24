@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+/*
+  "Sentry Signal" dark theme — matches the product design mockup exactly.
+  This product is dark-only by design (not light/dark adaptive), so these
+  tokens are declared once on :root rather than behind a media query.
+*/
+:root {
+  --bg-page: #0a0c0f;
+  --bg-sidebar: #0c0f13;
+  --bg-card: #12151a;
+  --bg-nested: #0f1318;
+  --bg-track: #171b21;
+  --bg-input: #12151a;
+
+  --border-default: #1f242d;
+  --border-subtle: #1c212a;
+  --border-subtler: #15191f;
+  --border-hover: #333a45;
+  --border-input: #232830;
+
+  --text-primary: #e7eaee;
+  --text-secondary: #b6bec9;
+  --text-muted: #8a93a0;
+  --text-faint: #6e7783;
+  --text-dim: #5d6673;
+  --text-dimmer: #4e5761;
+
+  --accent: #ffb020;
+  --accent-hover: #ffc257;
+  --accent-on: #0a0c0f;
+  --accent-wash: #ffb0201a;
+  --accent-border: #33291155;
+
+  --blue: #4ea8ff;
+  --violet: #8b7bff;
+  --teal: #35d6a4;
+  --red: #ff6b81;
+
+  --background: var(--bg-page);
+  --foreground: var(--text-primary);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans), system-ui, sans-serif;
+  --font-mono: var(--font-mono), monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+@keyframes pulseDot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}

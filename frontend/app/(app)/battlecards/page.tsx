@@ -1,0 +1,223 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import { apiFetch, ApiError } from "@/lib/api";
+import { useWorkspaceContext } from "@/lib/workspace-context";
+import { Battlecard, ChangeLog, Competitor } from "@/lib/types";
+
+export default function BattlecardsPage() {
+  const { workspaceId, ready: contextReady, canEdit } = useWorkspaceContext();
+
+  const [competitors, setCompetitors] = useState<Competitor[]>([]);
+  const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
+  const [battlecardsById, setBattlecardsById] = useState<Record<number, Battlecard | null>>({});
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [selected, setSelected] = useState<Record<number, number[]>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [proposing, setProposing] = useState<Record<number, boolean>>({});
+
+  const load = useCallback(async (wsId: number) => {
+    try {
+      const [comps, logs] = await Promise.all([
+        apiFetch(`/workspaces/${wsId}/competitors/`),
+        apiFetch(`/workspaces/${wsId}/change-logs/`),
+      ]);
+      setCompetitors(comps);
+      setChangeLogs(logs);
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    void (async () => {
+      await load(workspaceId);
+    })();
+  }, [workspaceId, load]);
+
+  // The competitor list here is fetched once on mount, so a competitor
+  // deleted from a different page/tab wouldn't disappear from an
+  // already-open Battlecards tab until the next full reload. Refetching on
+  // focus keeps it in sync without polling.
+  useEffect(() => {
+    if (!workspaceId) return;
+    function handleFocus() {
+      if (document.visibilityState === "visible") {
+        void load(workspaceId!);
+      }
+    }
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleFocus);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleFocus);
+    };
+  }, [workspaceId, load]);
+
+  async function loadBattlecard(competitorId: number) {
+    if (!workspaceId) return;
+    try {
+      const battlecard = await apiFetch(
+        `/workspaces/${workspaceId}/competitors/${competitorId}/battlecard/`
+      );
+      setBattlecardsById((prev) => ({ ...prev, [competitorId]: battlecard }));
+    } catch (err) {
+      if (err instanceof ApiError && err.message.toLowerCase().includes("no battlecard")) {
+        setBattlecardsById((prev) => ({ ...prev, [competitorId]: null }));
+      } else if (err instanceof ApiError) {
+        setError(err.message);
+      }
+    }
+  }
+
+  async function toggleExpand(competitorId: number) {
+    const willExpand = !expanded[competitorId];
+    setExpanded((prev) => ({ ...prev, [competitorId]: willExpand }));
+    if (willExpand && battlecardsById[competitorId] === undefined) {
+      await loadBattlecard(competitorId);
+    }
+  }
+
+  function toggleSelected(competitorId: number, changeLogId: number) {
+    setSelected((prev) => {
+      const current = prev[competitorId] ?? [];
+      const next = current.includes(changeLogId)
+        ? current.filter((id) => id !== changeLogId)
+        : [...current, changeLogId];
+      return { ...prev, [competitorId]: next };
+    });
+  }
+
+  async function handlePropose(competitorId: number) {
+    const changeLogIds = selected[competitorId] ?? [];
+    if (!workspaceId || changeLogIds.length === 0) return;
+
+    setProposing((prev) => ({ ...prev, [competitorId]: true }));
+    setError(null);
+    try {
+      await apiFetch(
+        `/workspaces/${workspaceId}/competitors/${competitorId}/battlecard/updates`,
+        { method: "POST", body: JSON.stringify({ change_log_ids: changeLogIds }) }
+      );
+      setSelected((prev) => ({ ...prev, [competitorId]: [] }));
+      await loadBattlecard(competitorId);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to propose update");
+    } finally {
+      setProposing((prev) => ({ ...prev, [competitorId]: false }));
+    }
+  }
+
+  if (!contextReady || loading) return null;
+
+  return (
+    <div className="flex flex-col gap-[18px] px-[34px] py-[30px] pb-[44px]" style={{ maxWidth: 1000 }}>
+      <div className="flex flex-col gap-[7px]">
+        <h1 className="m-0 text-[26px] font-semibold tracking-[-0.025em]">Battlecards</h1>
+        <p className="m-0 max-w-[560px] text-[13.5px] text-[var(--text-muted)]">
+          Live positioning per competitor. Propose updates from detected changes — each revision
+          waits for approval before it replaces the current version.
+        </p>
+      </div>
+
+      {error && (
+        <p className="rounded-lg bg-red-950/50 px-3 py-2 text-sm text-red-300">{error}</p>
+      )}
+
+      {competitors.length === 0 ? (
+        <p className="text-sm text-[var(--text-faint)]">No competitors tracked yet.</p>
+      ) : (
+        <div className="flex flex-col gap-[14px]">
+          {competitors.map((c) => {
+            const battlecard = battlecardsById[c.id];
+            const competitorChangeLogs = changeLogs.filter((log) => log.competitor_id === c.id);
+            const selectedIds = selected[c.id] ?? [];
+            const isExpanded = !!expanded[c.id];
+
+            return (
+              <div
+                key={c.id}
+                className="flex flex-col gap-4 rounded-[14px] border border-[var(--border-default)] bg-[var(--bg-card)] px-[22px] py-5"
+              >
+                <button
+                  onClick={() => toggleExpand(c.id)}
+                  className="flex w-full items-center justify-between gap-3 text-left"
+                >
+                  <span className="text-[14.5px] font-semibold tracking-tight">{c.name}</span>
+                  <div className="flex items-center gap-2.5">
+                    {battlecard && (
+                      <span className="font-mono text-[11px] text-[var(--text-faint)]">
+                        v{battlecard.version}
+                      </span>
+                    )}
+                    <span className="text-[13px] text-[var(--text-dim)]">
+                      {isExpanded ? "−" : "+"}
+                    </span>
+                  </div>
+                </button>
+
+                {isExpanded && (
+                  <div className="flex flex-col gap-4 border-t border-[var(--border-subtle)] pt-4">
+                    {battlecard ? (
+                      <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-nested)] px-4 py-3">
+                        <p className="whitespace-pre-wrap text-[13px] leading-[1.6] text-[var(--text-secondary)]">
+                          {battlecard.content_markdown || "(empty)"}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[var(--text-faint)]">
+                        No battlecard yet for this competitor.
+                      </p>
+                    )}
+
+                    {canEdit && (
+                      <div className="flex flex-col gap-2.5">
+                        <p className="text-xs font-medium text-[var(--text-secondary)]">
+                          Propose an update from:
+                        </p>
+                        {competitorChangeLogs.length === 0 ? (
+                          <p className="text-sm text-[var(--text-faint)]">No detected changes yet.</p>
+                        ) : (
+                          <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto rounded-lg border border-[var(--border-subtle)] p-2">
+                            {competitorChangeLogs.map((log) => (
+                              <li key={log.id}>
+                                <label className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedIds.includes(log.id)}
+                                    onChange={() => toggleSelected(c.id, log.id)}
+                                  />
+                                  <span className="rounded-md bg-[var(--bg-track)] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                                    {log.classification ?? "unscored"}
+                                  </span>
+                                  <span className="truncate">
+                                    {log.rationale ?? log.diff ?? `#${log.id}`}
+                                  </span>
+                                </label>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <button
+                          onClick={() => handlePropose(c.id)}
+                          disabled={proposing[c.id] || selectedIds.length === 0}
+                          className="h-8 w-fit rounded-lg bg-[var(--accent)] px-3 text-xs font-semibold text-[var(--accent-on)] disabled:opacity-50"
+                        >
+                          {proposing[c.id] ? "Proposing..." : "Propose update"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

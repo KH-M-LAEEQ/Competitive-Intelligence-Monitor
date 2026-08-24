@@ -1,0 +1,22 @@
+# virtual env
+venv/
+.venv/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# env files with real secrets
+.env
+.env.*
+!.env.example
+
+# generated artifacts
+storage/
+
+# log files
+*.log

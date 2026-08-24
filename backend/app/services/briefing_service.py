@@ -1,0 +1,131 @@
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.models.briefing import (
+    Briefing, BriefingAudience, BriefingDigestType, BriefingStatus, briefing_change_logs
+)
+from app.models.approval_item import ApprovalItem, ApprovalItemType, ApprovalStatus
+from app.models.change_log import ChangeLog
+from app.models.competitor import Competitor
+from app.models.llm_usage import TokenUsageLog, LLMUsagePurpose
+from app.services.budget_service import check_budget
+from app.services.llm.client import LLMClient
+from app.services.llm.prompts import UNTRUSTED_CONTENT_PREAMBLE, wrap_untrusted
+
+__all__ = ["generate_briefing", "BriefingDraft", "NoMatchingChangeLogs"]
+
+
+class NoMatchingChangeLogs(Exception):
+    pass
+
+
+class BriefingDraft(BaseModel):
+    title: str
+    body_markdown: str
+
+
+_AUDIENCE_GUIDANCE = {
+    "exec": "Keep it to 3-4 sentences of business impact — no jargon, no raw diffs.",
+    "sales": "Focus on talk-track-ready facts a rep could use on a call today.",
+    "product": "Focus on feature and positioning implications relevant to roadmap decisions.",
+    "all": "Write a general-audience summary balancing business impact and specifics.",
+}
+
+
+def _system_prompt(audience: str) -> str:
+    guidance = _AUDIENCE_GUIDANCE.get(audience, _AUDIENCE_GUIDANCE["all"])
+
+    return (
+        f"You are a competitive intelligence analyst drafting a briefing for "
+        f"a '{audience}' audience. {guidance}\n\n"
+        f"{UNTRUSTED_CONTENT_PREAMBLE}\n\n"
+        "Every briefing you draft is reviewed by a human and must be "
+        "explicitly approved before it is ever sent anywhere — write it as "
+        "a draft awaiting that review, not as something already delivered.\n\n"
+        'Respond with ONLY a JSON object: {"title": <short headline, under '
+        '12 words>, "body_markdown": <briefing body in markdown, roughly '
+        "100-250 words>}"
+    )
+
+
+def generate_briefing(
+    db: Session,
+    llm_client: LLMClient,
+    workspace_id: int,
+    audience: BriefingAudience,
+    digest_type: BriefingDigestType,
+    change_log_ids: list[int],
+    generated_by_user_id: int | None = None,
+) -> Briefing:
+    rows = (
+        db.query(ChangeLog, Competitor.name)
+        .join(Competitor, ChangeLog.competitor_id == Competitor.id)
+        .filter(
+            ChangeLog.id.in_(change_log_ids),
+            Competitor.workspace_id == workspace_id
+        )
+        .all()
+    )
+    if not rows:
+        raise NoMatchingChangeLogs(
+            "None of the given change_log_ids belong to this workspace"
+        )
+
+    lines = [
+        f"- [{competitor_name}] {change_log.classification or 'change'} "
+        f"(materiality {change_log.materiality_score}): "
+        f"{change_log.rationale or (change_log.diff or '')[:300]}"
+        for change_log, competitor_name in rows
+    ]
+
+    check_budget(db, workspace_id)
+
+    result = llm_client.complete(
+        system=_system_prompt(audience.value),
+        user=wrap_untrusted("\n".join(lines)),
+        response_model=BriefingDraft,
+    )
+
+    db.add(TokenUsageLog(
+        workspace_id=workspace_id,
+        purpose=LLMUsagePurpose.briefing,
+        model=result.model,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+    ))
+
+    briefing = Briefing(
+        workspace_id=workspace_id,
+        audience=audience,
+        digest_type=digest_type,
+        title=result.value.title,
+        body_markdown=result.value.body_markdown,
+        status=BriefingStatus.draft,
+        generated_by_user_id=generated_by_user_id,
+    )
+    db.add(briefing)
+    db.flush()
+
+    for change_log, _ in rows:
+        db.execute(
+            briefing_change_logs.insert().values(
+                briefing_id=briefing.id, change_log_id=change_log.id
+            )
+        )
+
+    # Generation and queuing happen together here — there's no separate
+    # "save as draft, submit later" step yet — but the two are still
+    # separate status transitions (draft -> pending_approval) so that
+    # step could be split out later without a schema change.
+    briefing.status = BriefingStatus.pending_approval
+    db.add(ApprovalItem(
+        workspace_id=workspace_id,
+        item_type=ApprovalItemType.briefing,
+        item_id=briefing.id,
+        status=ApprovalStatus.pending,
+    ))
+
+    db.commit()
+    db.refresh(briefing)
+
+    return briefing
