@@ -12,7 +12,6 @@ import {
   CompetitorSummary,
   OwnSite,
   Surface,
-  WorkspaceBudget,
 } from "@/lib/types";
 import ClassificationBadge, { classificationColor } from "@/components/ui/ClassificationBadge";
 import DonutChart from "@/components/charts/DonutChart";
@@ -20,12 +19,12 @@ import DualTrendChart, { DualTrendPoint } from "@/components/charts/DualTrendCha
 
 const TREND_DAYS = 14;
 const CLASS_COLORS: Record<string, string> = {
-  pricing_move: "#FFB020",
-  new_feature: "#4EA8FF",
-  positioning_shift: "#8B7BFF",
-  hiring_signal: "#35D6A4",
-  promotion: "#FF6B81",
-  other: "#8A93A0",
+  pricing_move: "#F5A524",
+  new_feature: "#4D9FFF",
+  positioning_shift: "#9B7BFF",
+  hiring_signal: "#20C997",
+  promotion: "#F0445E",
+  other: "#8B98A8",
 };
 const CLASS_LABELS: Record<string, string> = {
   pricing_move: "Pricing move",
@@ -34,19 +33,6 @@ const CLASS_LABELS: Record<string, string> = {
   hiring_signal: "Hiring signal",
   promotion: "Promotion",
   other: "Other",
-};
-
-const PURPOSE_COLORS: Record<string, string> = {
-  scoring: "#FFB020",
-  briefing: "#4EA8FF",
-  embedding: "#FF6B81",
-  classification: "#35D6A4",
-};
-const PURPOSE_LABELS: Record<string, string> = {
-  scoring: "Materiality scoring",
-  briefing: "Briefings & battlecards",
-  embedding: "Embeddings",
-  classification: "Classification",
 };
 
 interface CheckRun {
@@ -102,7 +88,6 @@ export default function DashboardPage() {
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [briefings, setBriefings] = useState<Briefing[]>([]);
   const [checkRuns, setCheckRuns] = useState<CheckRun[]>([]);
-  const [budget, setBudget] = useState<WorkspaceBudget | null>(null);
   const [ownSite, setOwnSite] = useState<OwnSite | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -117,12 +102,11 @@ export default function DashboardPage() {
 
   const load = useCallback(async (wsId: number) => {
     try {
-      const [comps, logs, allApprovals, briefingList, budgetData, ownSiteData] = await Promise.all([
+      const [comps, logs, allApprovals, briefingList, ownSiteData] = await Promise.all([
         apiFetch(`/workspaces/${wsId}/competitors/`),
         apiFetch(`/workspaces/${wsId}/change-logs/`),
         apiFetch(`/workspaces/${wsId}/approvals/`),
         apiFetch(`/workspaces/${wsId}/briefings/`),
-        apiFetch(`/workspaces/${wsId}/budget/`),
         apiFetch(`/workspaces/${wsId}/own-site/`).catch(() => null),
       ]);
       setCompetitors(comps);
@@ -138,7 +122,6 @@ export default function DashboardPage() {
       );
       setApprovals(allApprovals);
       setBriefings(briefingList);
-      setBudget(budgetData);
       setOwnSite(ownSiteData);
       setOwnSiteUrl(ownSiteData?.url ?? "");
 
@@ -295,18 +278,6 @@ export default function DashboardPage() {
     }
     return Object.entries(buckets).map(([date, v]) => ({ date, ...v }));
   }, [changeLogs, nowMs]);
-
-  const costBreakdownData = useMemo(() => {
-    const byPurpose = budget?.spend_by_purpose ?? {};
-    return Object.entries(byPurpose)
-      .filter(([, cost]) => cost > 0)
-      .sort((a, b) => b[1] - a[1])
-      .map(([purpose, cost]) => ({
-        label: PURPOSE_LABELS[purpose] ?? purpose,
-        count: cost,
-        color: PURPOSE_COLORS[purpose] ?? "#8A93A0",
-      }));
-  }, [budget]);
 
   const classificationData = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -557,56 +528,34 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-[14px] lg:grid-cols-2">
-        <Card>
-          <div className="flex flex-col gap-[5px]">
-            <h2 className="m-0 text-[14.5px] font-semibold tracking-[-0.01em]">LLM cost breakdown</h2>
-            <p className="m-0 text-[11.5px] text-[var(--text-faint)]">
-              Real spend since {budget ? new Date(budget.period_start).toLocaleDateString() : "—"}
-            </p>
-          </div>
-          {costBreakdownData.length === 0 ? (
-            <p className="text-xs text-[var(--text-faint)]">
-              No LLM usage yet — run a check or generate a briefing to see real spend here.
-            </p>
-          ) : (
-            <DonutChart
-              data={costBreakdownData}
-              centerValue={`$${(budget?.estimated_spend_usd ?? 0).toFixed(4)}`}
-              centerLabel="spent"
-            />
-          )}
-        </Card>
-
-        <Card>
-          <div className="flex flex-col gap-[5px]">
-            <h2 className="m-0 text-[14.5px] font-semibold tracking-[-0.01em]">
-              Success metrics vs. target
-            </h2>
-            <p className="m-0 text-[11.5px] text-[var(--text-faint)]">Rolling window, this workspace</p>
-          </div>
-          <div className="flex flex-col gap-[15px]">
-            <MetricBar
-              label="Crawl success"
-              value={crawlSuccessRate}
-              target={95}
-              color="var(--teal)"
-            />
-            <MetricBar
-              label="Materiality precision"
-              value={materialityPrecision}
-              target={70}
-              color="var(--teal)"
-            />
-            <MetricBar
-              label="Briefing approval rate"
-              value={briefingApprovalRate}
-              target={50}
-              color="var(--accent)"
-            />
-          </div>
-        </Card>
-      </div>
+      <Card>
+        <div className="flex flex-col gap-[5px]">
+          <h2 className="m-0 text-[14.5px] font-semibold tracking-[-0.01em]">
+            Success metrics vs. target
+          </h2>
+          <p className="m-0 text-[11.5px] text-[var(--text-faint)]">Rolling window, this workspace</p>
+        </div>
+        <div className="flex flex-col gap-[15px]">
+          <MetricBar
+            label="Crawl success"
+            value={crawlSuccessRate}
+            target={95}
+            color="var(--teal)"
+          />
+          <MetricBar
+            label="Materiality precision"
+            value={materialityPrecision}
+            target={70}
+            color="var(--teal)"
+          />
+          <MetricBar
+            label="Briefing approval rate"
+            value={briefingApprovalRate}
+            target={50}
+            color="var(--accent)"
+          />
+        </div>
+      </Card>
 
       <Card>
         <div className="flex items-center justify-between">
@@ -645,16 +594,16 @@ export default function DashboardPage() {
                     }}
                   >
                     <td className="px-1 py-[11px] text-[12.5px] font-medium">
-                      {row.isOwnSite ? (
-                        <span className="text-[var(--accent)]">{row.name}</span>
-                      ) : (
-                        <Link
-                          href={`/competitors/${row.id}/compare`}
-                          className="hover:text-[var(--accent)] hover:underline"
-                        >
-                          {row.name}
-                        </Link>
-                      )}
+                      <Link
+                        href={`/competitors/${row.id}`}
+                        className={
+                          row.isOwnSite
+                            ? "text-[var(--accent)] hover:underline"
+                            : "hover:text-[var(--accent)] hover:underline"
+                        }
+                      >
+                        {row.name}
+                      </Link>
                     </td>
                     <td className="px-1 py-[11px] text-right font-mono text-[12px] text-[var(--text-secondary)]">
                       {row.changesDetected}

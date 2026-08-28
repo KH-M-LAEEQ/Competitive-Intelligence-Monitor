@@ -1,8 +1,8 @@
 export function materialityStyle(score: number): { color: string; label: string } {
-  if (score >= 90) return { color: "#FF6B81", label: "critical" };
-  if (score >= 80) return { color: "#FF6B81", label: "high" };
-  if (score >= 50) return { color: "#FFB020", label: "moderate" };
-  return { color: "#35D6A4", label: "low" };
+  if (score >= 90) return { color: "#F0445E", label: "critical" };
+  if (score >= 80) return { color: "#F0445E", label: "high" };
+  if (score >= 50) return { color: "#F5A524", label: "moderate" };
+  return { color: "#20C997", label: "low" };
 }
 
 export default function MaterialityBar({ score }: { score: number }) {

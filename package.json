@@ -1,0 +1,12 @@
+{
+  "name": "competitive-intelligence-monitor",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "cd backend && venv\\Scripts\\uvicorn.exe app.main:app --reload --port 8000",
+    "dev:frontend": "npm --prefix frontend run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

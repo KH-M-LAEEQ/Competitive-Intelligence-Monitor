@@ -8,9 +8,9 @@ import { ChangeLog, Competitor, Surface } from "@/lib/types";
 import ClassificationBadge from "@/components/ui/ClassificationBadge";
 import { materialityStyle } from "@/components/ui/MaterialityBar";
 import { surfaceDisplayName } from "@/lib/surface-name";
+import { ChangeCard } from "@/components/changelog/SurfaceChangeCards";
 
 const NOISE_STORAGE_PREFIX = "ci-noise-dismissed:";
-const DIFF_PREVIEW_LINES = 14;
 
 function relativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -21,18 +21,6 @@ function relativeTime(iso: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.round(hours / 24);
   return `${days}d ago`;
-}
-
-function diffLines(diff: string | null) {
-  if (!diff) return [];
-  return diff
-    .split("\n")
-    .filter((l) => !l.startsWith("---") && !l.startsWith("+++") && !l.startsWith("@@"))
-    .map((line) => {
-      if (line.startsWith("+")) return { kind: "add" as const, text: line.slice(1) };
-      if (line.startsWith("-")) return { kind: "del" as const, text: line.slice(1) };
-      return { kind: "ctx" as const, text: line };
-    });
 }
 
 export default function ChangeFeedPage() {
@@ -53,7 +41,6 @@ export default function ChangeFeedPage() {
   // Rows are collapsed by default so the feed reads as a scannable table;
   // opening a row reveals its diff/rationale/actions below it.
   const [openRows, setOpenRows] = useState<Set<number>>(new Set());
-  const [diffExpanded, setDiffExpanded] = useState<Set<number>>(new Set());
   const [drafting, setDrafting] = useState<Record<number, boolean>>({});
   const [drafted, setDrafted] = useState<Record<number, boolean>>({});
   const [draftError, setDraftError] = useState<Record<number, string>>({});
@@ -241,9 +228,6 @@ export default function ChangeFeedPage() {
             <tbody>
               {visibleLogs.map((log, i) => {
                 const surface = surfacesById[log.surface_id];
-                const lines = diffLines(log.diff);
-                const isDiffExpanded = diffExpanded.has(log.id);
-                const visibleDiffLines = isDiffExpanded ? lines : lines.slice(0, DIFF_PREVIEW_LINES);
                 const isNoise = noiseIds.has(log.id);
                 const isHighlighted = log.id === highlightId;
                 const isOpen = openRows.has(log.id);
@@ -273,7 +257,7 @@ export default function ChangeFeedPage() {
                         <ClassificationBadge classification={log.classification} />
                       </td>
                       <td className="max-w-[280px] truncate px-1 py-[11px] text-[var(--text-secondary)]">
-                        {log.headline || log.rationale || (lines.length > 0 ? "Content change detected" : "—")}
+                        {log.headline || log.rationale || (log.diff ? "Content change detected" : "—")}
                       </td>
                       <td className="px-1 py-[11px] text-right font-mono text-[12px]" style={{ color: score !== null ? scoreColor : "var(--text-dim)" }}>
                         {score !== null ? (score / 100).toFixed(2) : "—"}
@@ -293,63 +277,10 @@ export default function ChangeFeedPage() {
                         }}
                       >
                         <td colSpan={7} className="px-[22px] py-4">
-                          <div className="flex flex-col gap-3">
-                            {lines.length > 0 && (
-                              <div className="overflow-x-auto rounded-lg border border-[var(--border-subtler)] bg-[var(--bg-page)] px-3 py-2.5 font-mono text-[12px] leading-[1.65]">
-                                {visibleDiffLines.map((l, li) => (
-                                  <div
-                                    key={li}
-                                    className="whitespace-pre-wrap"
-                                    style={{
-                                      color:
-                                        l.kind === "add"
-                                          ? "var(--teal)"
-                                          : l.kind === "del"
-                                          ? "var(--red)"
-                                          : "var(--text-dim)",
-                                      background:
-                                        l.kind === "add"
-                                          ? "#35D6A414"
-                                          : l.kind === "del"
-                                          ? "#FF6B8114"
-                                          : undefined,
-                                    }}
-                                  >
-                                    {l.kind === "add" ? "+ " : l.kind === "del" ? "- " : "  "}
-                                    {l.text}
-                                  </div>
-                                ))}
-                                {lines.length > DIFF_PREVIEW_LINES && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setDiffExpanded((prev) => {
-                                        const next = new Set(prev);
-                                        if (isDiffExpanded) next.delete(log.id);
-                                        else next.add(log.id);
-                                        return next;
-                                      });
-                                    }}
-                                    className="mt-1 text-[11px] font-medium text-[var(--accent)] hover:text-[var(--accent-hover)]"
-                                  >
-                                    {isDiffExpanded ? "Show less" : `+${lines.length - DIFF_PREVIEW_LINES} more lines`}
-                                  </button>
-                                )}
-                              </div>
-                            )}
+                          <div className="flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+                            <ChangeCard log={log} surface={surface} />
 
-                            {log.rationale && (
-                              <div className="flex flex-col gap-1">
-                                <span className="font-mono text-[9.5px] uppercase tracking-[.13em] text-[var(--text-dim)]">
-                                  Why it matters
-                                </span>
-                                <p className="m-0 text-[13px] leading-[1.55] text-[var(--text-secondary)]">
-                                  {log.rationale}
-                                </p>
-                              </div>
-                            )}
-
-                            <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-3">
                               {isNoise ? (
                                 <button
                                   onClick={() => unmarkNoise(log.id)}

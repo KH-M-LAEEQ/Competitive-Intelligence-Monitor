@@ -4,3 +4,7 @@
 # OS junk
 .DS_Store
 Thumbs.db
+
+# root-level dev orchestration (concurrently)
+node_modules/
+*.log

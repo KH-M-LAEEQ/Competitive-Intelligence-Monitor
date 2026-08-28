@@ -8,8 +8,8 @@ import { WorkspaceMember, WorkspaceRole } from "@/lib/types";
 
 const ROLE_BADGE_STYLES: Record<WorkspaceRole, { color: string; background: string }> = {
   owner: { color: "var(--accent)", background: "var(--accent-wash)" },
-  editor: { color: "var(--blue)", background: "#4ea8ff1a" },
-  reviewer: { color: "var(--violet)", background: "#8b7bff1a" },
+  editor: { color: "var(--blue)", background: "#4d9fff1a" },
+  reviewer: { color: "var(--violet)", background: "#9b7bff1a" },
 };
 
 function initialsFor(name: string | null, email: string) {
