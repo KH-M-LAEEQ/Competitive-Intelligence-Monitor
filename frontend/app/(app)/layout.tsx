@@ -1,6 +1,8 @@
 "use client";
 
 import { WorkspaceProvider, useWorkspaceContext } from "@/lib/workspace-context";
+import { ToastProvider } from "@/components/ui/Toast";
+import { BriefingJobsProvider } from "@/lib/briefing-jobs-context";
 import Sidebar from "@/components/shell/Sidebar";
 import Header from "@/components/shell/Header";
 
@@ -38,7 +40,11 @@ function Shell({ children }: { children: React.ReactNode }) {
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <WorkspaceProvider>
-      <Shell>{children}</Shell>
+      <ToastProvider>
+        <BriefingJobsProvider>
+          <Shell>{children}</Shell>
+        </BriefingJobsProvider>
+      </ToastProvider>
     </WorkspaceProvider>
   );
 }

@@ -1,15 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.briefing import Briefing
+from app.models.briefing_job import BriefingJob, BriefingJobStatus
 from app.models.user import User
 from app.models.workspace_member import WorkspaceMember, WorkspaceRole
-from app.schemas.briefing import GenerateBriefingRequest, BriefingResponse
+from app.schemas.briefing import GenerateBriefingRequest, BriefingResponse, BriefingJobResponse
 from app.dependencies import get_current_user, get_current_workspace, require_role, rate_limit
 from app.services.llm.factory import get_llm_client
-from app.services.briefing_service import generate_briefing, NoMatchingChangeLogs
-from app.services.budget_service import BudgetExceededError
+from app.services.briefing_service import run_briefing_job
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/briefings",
@@ -19,11 +19,13 @@ router = APIRouter(
 
 @router.post(
     "/generate-now",
-    response_model=BriefingResponse
+    response_model=BriefingJobResponse,
+    status_code=202
 )
 def generate_now(
     workspace_id: int,
     payload: GenerateBriefingRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     membership: WorkspaceMember = Depends(require_role(WorkspaceRole.owner, WorkspaceRole.editor)),
@@ -37,18 +39,44 @@ def generate_now(
             detail="No LLM is configured for this deployment"
         )
 
-    try:
-        briefing = generate_briefing(
-            db, llm_client, workspace_id,
-            payload.audience, payload.digest_type, payload.change_log_ids,
-            generated_by_user_id=current_user.id
-        )
-    except NoMatchingChangeLogs as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except BudgetExceededError as exc:
-        raise HTTPException(status_code=402, detail=str(exc))
+    job = BriefingJob(
+        workspace_id=workspace_id,
+        audience=payload.audience,
+        digest_type=payload.digest_type,
+        change_log_ids=payload.change_log_ids,
+        status=BriefingJobStatus.queued,
+        created_by_user_id=current_user.id,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
 
-    return briefing
+    background_tasks.add_task(run_briefing_job, job.id)
+
+    return job
+
+
+@router.get(
+    "/jobs/{job_id}",
+    response_model=BriefingJobResponse
+)
+def get_briefing_job(
+    workspace_id: int,
+    job_id: int,
+    db: Session = Depends(get_db),
+    membership: WorkspaceMember = Depends(get_current_workspace)
+):
+
+    job = (
+        db.query(BriefingJob)
+        .filter(BriefingJob.id == job_id, BriefingJob.workspace_id == workspace_id)
+        .first()
+    )
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Briefing job not found")
+
+    return job
 
 
 @router.get(

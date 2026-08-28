@@ -105,6 +105,17 @@ export interface Briefing {
   delivered_at: string | null;
 }
 
+export type BriefingJobStatus = "queued" | "running" | "success" | "failed";
+
+export interface BriefingJob {
+  id: number;
+  status: BriefingJobStatus;
+  briefing_id: number | null;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
 export type ApprovalItemType = "briefing" | "battlecard_update" | "crm_note";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 

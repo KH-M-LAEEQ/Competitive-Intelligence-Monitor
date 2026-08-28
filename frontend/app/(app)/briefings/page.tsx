@@ -3,7 +3,10 @@
 import { useEffect, useState, useCallback, FormEvent } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useWorkspaceContext } from "@/lib/workspace-context";
-import { Briefing, BriefingAudience, BriefingDigestType, ChangeLog } from "@/lib/types";
+import { useBriefingJobs } from "@/lib/briefing-jobs-context";
+import { Briefing, BriefingAudience, BriefingDigestType, ChangeLog, Competitor } from "@/lib/types";
+import ClassificationBadge from "@/components/ui/ClassificationBadge";
+import { renderMarkdown } from "@/lib/simple-markdown";
 
 const STATUS_STYLES: Record<Briefing["status"], string> = {
   draft: "bg-[var(--bg-track)] text-[var(--text-dim)]",
@@ -13,11 +16,24 @@ const STATUS_STYLES: Record<Briefing["status"], string> = {
   delivered: "bg-[var(--blue)]/15 text-[var(--blue)]",
 };
 
+function relativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
 export default function BriefingsPage() {
   const { workspaceId, ready: contextReady, canEdit } = useWorkspaceContext();
+  const { startBriefingJob, activeJobCount, completedCount } = useBriefingJobs();
 
   const [briefings, setBriefings] = useState<Briefing[]>([]);
   const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
+  const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,12 +44,19 @@ export default function BriefingsPage() {
 
   const load = useCallback(async (wsId: number) => {
     try {
-      const [briefingList, logs] = await Promise.all([
+      const [briefingList, logs, comps] = await Promise.all([
         apiFetch(`/workspaces/${wsId}/briefings/`),
         apiFetch(`/workspaces/${wsId}/change-logs/`),
+        apiFetch(`/workspaces/${wsId}/competitors/`),
       ]);
       setBriefings(briefingList);
-      setChangeLogs(logs);
+      setChangeLogs(
+        [...logs].sort(
+          (a: ChangeLog, b: ChangeLog) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )
+      );
+      setCompetitors(comps);
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
     } finally {
@@ -48,6 +71,19 @@ export default function BriefingsPage() {
     })();
   }, [workspaceId, load]);
 
+  // A briefing generated elsewhere (or from this page) lands via a
+  // background job — completedCount bumps whenever any job resolves, so
+  // this list picks up newly-approved-queue briefings without a manual
+  // reload.
+  useEffect(() => {
+    if (!workspaceId || completedCount === 0) return;
+    void load(workspaceId);
+  }, [completedCount, workspaceId, load]);
+
+  function competitorName(id: number) {
+    return competitors.find((c) => c.id === id)?.name ?? `#${id}`;
+  }
+
   function toggleSelected(id: number) {
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
@@ -60,22 +96,15 @@ export default function BriefingsPage() {
 
     setGenerating(true);
     setError(null);
-    try {
-      await apiFetch(`/workspaces/${workspaceId}/briefings/generate-now`, {
-        method: "POST",
-        body: JSON.stringify({
-          audience,
-          digest_type: digestType,
-          change_log_ids: selectedIds,
-        }),
-      });
+    const ok = await startBriefingJob({
+      audience,
+      digest_type: digestType,
+      change_log_ids: selectedIds,
+    });
+    if (ok) {
       setSelectedIds([]);
-      await load(workspaceId);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to generate briefing");
-    } finally {
-      setGenerating(false);
     }
+    setGenerating(false);
   }
 
   if (!contextReady || loading) return null;
@@ -129,30 +158,52 @@ export default function BriefingsPage() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-[var(--text-muted)]">Source changes</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-[var(--text-muted)]">Source changes</label>
+                {selectedIds.length > 0 && (
+                  <span className="font-mono text-[10.5px] text-[var(--text-faint)]">
+                    {selectedIds.length} selected
+                  </span>
+                )}
+              </div>
               {changeLogs.length === 0 ? (
                 <p className="text-sm text-[var(--text-faint)]">
                   No detected changes yet to draft a briefing from.
                 </p>
               ) : (
-                <ul className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-nested)] p-2">
-                  {changeLogs.map((log) => (
-                    <li key={log.id}>
-                      <label className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-nested)] p-2">
+                  {changeLogs.map((log) => {
+                    const checked = selectedIds.includes(log.id);
+                    return (
+                      <label
+                        key={log.id}
+                        className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-[var(--bg-track)]"
+                        style={{ background: checked ? "var(--accent-wash)" : undefined }}
+                      >
                         <input
                           type="checkbox"
-                          checked={selectedIds.includes(log.id)}
+                          checked={checked}
                           onChange={() => toggleSelected(log.id)}
-                          className="accent-[var(--accent)]"
+                          className="mt-[3px] accent-[var(--accent)]"
                         />
-                        <span className="rounded-md bg-[var(--bg-track)] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
-                          {log.classification ?? "unscored"}
-                        </span>
-                        <span className="truncate">{log.rationale ?? log.diff ?? `#${log.id}`}</span>
+                        <div className="flex min-w-0 flex-1 flex-col gap-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[12.5px] font-medium text-[var(--text-primary)]">
+                              {competitorName(log.competitor_id)}
+                            </span>
+                            <ClassificationBadge classification={log.classification} />
+                            <span className="ml-auto font-mono text-[10.5px] text-[var(--text-faint)]">
+                              {relativeTime(log.created_at)}
+                            </span>
+                          </div>
+                          <p className="m-0 truncate text-[12.5px] text-[var(--text-secondary)]">
+                            {log.headline || log.rationale || `Change #${log.id}`}
+                          </p>
+                        </div>
                       </label>
-                    </li>
-                  ))}
-                </ul>
+                    );
+                  })}
+                </div>
               )}
             </div>
 
@@ -161,7 +212,7 @@ export default function BriefingsPage() {
               disabled={generating || selectedIds.length === 0}
               className="h-8 w-fit rounded-lg bg-[var(--accent)] px-3 text-xs font-semibold text-[var(--accent-on)] disabled:opacity-50"
             >
-              {generating ? "Generating..." : "Generate briefing"}
+              {generating ? "Queuing..." : "Generate briefing"}
             </button>
           </form>
         </div>
@@ -169,10 +220,22 @@ export default function BriefingsPage() {
 
       <div className="flex flex-col gap-[14px]">
         <h2 className="m-0 text-[14.5px] font-semibold tracking-[-0.01em]">All briefings</h2>
-        {briefings.length === 0 ? (
+        {activeJobCount === 0 && briefings.length === 0 ? (
           <p className="text-sm text-[var(--text-faint)]">No briefings yet.</p>
         ) : (
           <div className="flex flex-col gap-[14px]">
+            {Array.from({ length: activeJobCount }).map((_, i) => (
+              <div
+                key={`generating-${i}`}
+                className="flex items-center gap-2.5 rounded-[14px] border border-dashed border-[var(--border-hover)] bg-[var(--bg-card)] px-[22px] py-5"
+              >
+                <span
+                  className="h-2 w-2 flex-shrink-0 rounded-full"
+                  style={{ background: "var(--accent)", animation: "pulseDot 1.4s ease-in-out infinite" }}
+                />
+                <span className="text-[13px] text-[var(--text-muted)]">Generating briefing…</span>
+              </div>
+            ))}
             {briefings.map((b) => (
               <div
                 key={b.id}
@@ -190,9 +253,9 @@ export default function BriefingsPage() {
                   {b.audience} &middot; {b.digest_type} &middot;{" "}
                   {new Date(b.created_at).toLocaleString()}
                 </p>
-                <p className="whitespace-pre-wrap text-[13px] leading-[1.6] text-[var(--text-secondary)]">
-                  {b.body_markdown}
-                </p>
+                <div className="text-[13px] leading-[1.6] text-[var(--text-secondary)]">
+                  {renderMarkdown(b.body_markdown)}
+                </div>
               </div>
             ))}
           </div>

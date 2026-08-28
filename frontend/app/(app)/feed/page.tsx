@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from "rea
 import { useSearchParams } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useWorkspaceContext } from "@/lib/workspace-context";
+import { useBriefingJobs } from "@/lib/briefing-jobs-context";
 import { ChangeLog, Competitor, Surface } from "@/lib/types";
 import ClassificationBadge from "@/components/ui/ClassificationBadge";
 import { materialityStyle } from "@/components/ui/MaterialityBar";
@@ -25,6 +26,7 @@ function relativeTime(iso: string): string {
 
 export default function ChangeFeedPage() {
   const { workspaceId, ready: contextReady } = useWorkspaceContext();
+  const { startBriefingJob } = useBriefingJobs();
   const searchParams = useSearchParams();
   const highlightId = Number(searchParams.get("highlight")) || null;
   const logRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
@@ -41,9 +43,7 @@ export default function ChangeFeedPage() {
   // Rows are collapsed by default so the feed reads as a scannable table;
   // opening a row reveals its diff/rationale/actions below it.
   const [openRows, setOpenRows] = useState<Set<number>>(new Set());
-  const [drafting, setDrafting] = useState<Record<number, boolean>>({});
-  const [drafted, setDrafted] = useState<Record<number, boolean>>({});
-  const [draftError, setDraftError] = useState<Record<number, string>>({});
+  const [queued, setQueued] = useState<Record<number, boolean>>({});
 
   const storageKey = workspaceId ? `${NOISE_STORAGE_PREFIX}${workspaceId}` : null;
 
@@ -150,21 +150,9 @@ export default function ChangeFeedPage() {
 
   async function draftBriefing(log: ChangeLog) {
     if (!workspaceId) return;
-    setDrafting((prev) => ({ ...prev, [log.id]: true }));
-    setDraftError((prev) => ({ ...prev, [log.id]: "" }));
-    try {
-      await apiFetch(`/workspaces/${workspaceId}/briefings/generate-now`, {
-        method: "POST",
-        body: JSON.stringify({ change_log_ids: [log.id] }),
-      });
-      setDrafted((prev) => ({ ...prev, [log.id]: true }));
-    } catch (err) {
-      setDraftError((prev) => ({
-        ...prev,
-        [log.id]: err instanceof ApiError ? err.message : "Failed to draft briefing",
-      }));
-    } finally {
-      setDrafting((prev) => ({ ...prev, [log.id]: false }));
+    const ok = await startBriefingJob({ change_log_ids: [log.id] });
+    if (ok) {
+      setQueued((prev) => ({ ...prev, [log.id]: true }));
     }
   }
 
@@ -296,21 +284,17 @@ export default function ChangeFeedPage() {
                                   Mark as noise
                                 </button>
                               )}
-                              {drafted[log.id] ? (
+                              {queued[log.id] ? (
                                 <span className="text-[11.5px] font-medium text-[var(--teal)]">
-                                  Briefing drafted — sent to approval queue
+                                  Queued — you&apos;ll get a notification when it&apos;s ready
                                 </span>
                               ) : (
                                 <button
                                   onClick={() => draftBriefing(log)}
-                                  disabled={drafting[log.id]}
                                   className="h-7 rounded-md bg-[var(--accent)] px-2.5 text-[11.5px] font-semibold text-[var(--accent-on)] disabled:opacity-50"
                                 >
-                                  {drafting[log.id] ? "Drafting..." : "Draft briefing"}
+                                  Draft briefing
                                 </button>
-                              )}
-                              {draftError[log.id] && (
-                                <span className="text-[11.5px] text-[var(--red)]">{draftError[log.id]}</span>
                               )}
                             </div>
                           </div>

@@ -23,6 +23,7 @@ from app.models.snapshot import Snapshot  # noqa: E402
 from app.models.llm_usage import TokenUsageLog  # noqa: E402
 from app.models.workspace_budget import WorkspaceBudget  # noqa: E402
 from app.models.briefing import Briefing  # noqa: E402
+from app.models.briefing_job import BriefingJob  # noqa: E402
 from app.models.approval_item import ApprovalItem  # noqa: E402
 from app.models.audit_log import AuditLog  # noqa: E402
 from app.models.battlecard import Battlecard  # noqa: E402

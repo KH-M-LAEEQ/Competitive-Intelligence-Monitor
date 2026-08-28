@@ -1,18 +1,26 @@
+import logging
+from datetime import datetime
+
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.database import SessionLocal
 from app.models.briefing import (
     Briefing, BriefingAudience, BriefingDigestType, BriefingStatus, briefing_change_logs
 )
+from app.models.briefing_job import BriefingJob, BriefingJobStatus
 from app.models.approval_item import ApprovalItem, ApprovalItemType, ApprovalStatus
 from app.models.change_log import ChangeLog
 from app.models.competitor import Competitor
 from app.models.llm_usage import TokenUsageLog, LLMUsagePurpose
-from app.services.budget_service import check_budget
+from app.services.budget_service import check_budget, BudgetExceededError
 from app.services.llm.client import LLMClient
+from app.services.llm.factory import get_llm_client
 from app.services.llm.prompts import UNTRUSTED_CONTENT_PREAMBLE, wrap_untrusted
 
-__all__ = ["generate_briefing", "BriefingDraft", "NoMatchingChangeLogs"]
+__all__ = ["generate_briefing", "run_briefing_job", "BriefingDraft", "NoMatchingChangeLogs"]
+
+logger = logging.getLogger(__name__)
 
 
 class NoMatchingChangeLogs(Exception):
@@ -129,3 +137,49 @@ def generate_briefing(
     db.refresh(briefing)
 
     return briefing
+
+
+def run_briefing_job(job_id: int) -> None:
+    """Runs generate_briefing() for a queued BriefingJob and records the
+    outcome on it. Called via FastAPI's BackgroundTasks (see
+    routers/briefings.py), so it opens its own session rather than reusing
+    the request-scoped one, matching the pattern scheduler.py already uses
+    for out-of-request work.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(BriefingJob).filter(BriefingJob.id == job_id).first()
+        if job is None:
+            return
+
+        job.status = BriefingJobStatus.running
+        db.commit()
+
+        try:
+            llm_client = get_llm_client()
+            if llm_client is None:
+                raise RuntimeError("No LLM is configured for this deployment")
+
+            briefing = generate_briefing(
+                db, llm_client, job.workspace_id,
+                job.audience, job.digest_type, job.change_log_ids,
+                generated_by_user_id=job.created_by_user_id,
+            )
+            job.status = BriefingJobStatus.success
+            job.briefing_id = briefing.id
+        except (NoMatchingChangeLogs, BudgetExceededError, RuntimeError) as exc:
+            db.rollback()
+            job = db.query(BriefingJob).filter(BriefingJob.id == job_id).first()
+            job.status = BriefingJobStatus.failed
+            job.error = str(exc)
+        except Exception:  # noqa: BLE001 — any unexpected failure must still resolve the job, not hang it
+            logger.exception("Briefing job %s failed unexpectedly", job_id)
+            db.rollback()
+            job = db.query(BriefingJob).filter(BriefingJob.id == job_id).first()
+            job.status = BriefingJobStatus.failed
+            job.error = "Briefing generation failed unexpectedly"
+
+        job.finished_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
