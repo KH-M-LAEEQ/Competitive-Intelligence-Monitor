@@ -35,7 +35,7 @@ from app.services.rendered_content_service import RenderedContentError
 
 
 @pytest.fixture()
-def db_session():
+def db_session(monkeypatch):
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -43,6 +43,21 @@ def db_session():
     )
     Base.metadata.create_all(bind=engine)
     TestingSessionLocal = sessionmaker(autoflush=False, autocommit=False, bind=engine)
+
+    # Background jobs (briefing generation, battlecard-update proposals) open
+    # their own session via a module-level `SessionLocal` rather than the
+    # request-scoped get_db dependency (see briefing_service.run_briefing_job
+    # / battlecard_service.run_battlecard_update_job) — each importing module
+    # binds its own name to the sessionmaker at import time, so patching
+    # app.database.SessionLocal alone wouldn't reach them. Point every such
+    # consumer at this test's in-memory engine, or BackgroundTasks silently
+    # query the real configured DATABASE_URL instead of the test DB.
+    import app.database as app_database
+    import app.services.briefing_service as briefing_service
+    import app.services.battlecard_service as battlecard_service
+    monkeypatch.setattr(app_database, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(briefing_service, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(battlecard_service, "SessionLocal", TestingSessionLocal)
 
     session = TestingSessionLocal()
     try:

@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /*
-  "Sentry Signal" dark theme — matches the product design mockup exactly.
+  "Intelligence Monitor" dark theme — matches the product design mockup exactly.
   This product is dark-only by design (not light/dark adaptive), so these
   tokens are declared once on :root rather than behind a media query.
 */

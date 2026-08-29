@@ -1,5 +1,6 @@
 import app.routers.briefings as briefings_router
 import app.routers.battlecards as battlecards_router
+import app.services.battlecard_service as battlecard_service
 import app.services.check_service as check_service
 from app.services.llm.client import LLMCallResult
 from app.services.briefing_service import BriefingDraft
@@ -121,13 +122,25 @@ def test_battlecard_propose_blocked_with_402_when_over_budget(client, monkeypatc
         f"/workspaces/{workspace['id']}/budget/", json={"monthly_cap_usd": 0.0}, headers=headers
     )
     monkeypatch.setattr(battlecards_router, "get_llm_client", lambda: _FakeBattlecardLLMClient())
+    monkeypatch.setattr(battlecard_service, "get_llm_client", lambda: _FakeBattlecardLLMClient())
 
+    # Budget is checked inside the background job (draft_update_from_change_
+    # logs), not at the router level — propose_update itself just queues the
+    # job and returns 202; the 402 only shows up once the job resolves.
     res = client.post(
         f"/workspaces/{workspace['id']}/competitors/{competitor['id']}/battlecard/updates",
         json={"change_log_ids": [change_log_id]},
         headers=headers,
     )
-    assert res.status_code == 402
+    assert res.status_code == 202
+    job = res.json()
+
+    job_res = client.get(
+        f"/workspaces/{workspace['id']}/competitors/{competitor['id']}/battlecard/updates/jobs/{job['id']}",
+        headers=headers,
+    ).json()
+    assert job_res["status"] == "failed"
+    assert "monthly cap" in job_res["error"].lower()
 
 
 def test_insights_trends_degrades_gracefully_when_over_budget(client, monkeypatch):

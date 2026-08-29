@@ -1,22 +1,28 @@
+import logging
 from datetime import datetime
 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.database import SessionLocal
 from app.models.battlecard import Battlecard
 from app.models.battlecard_update import BattlecardUpdate
+from app.models.battlecard_update_job import BattlecardUpdateJob, BattlecardUpdateJobStatus
 from app.models.approval_item import ApprovalItem, ApprovalItemType, ApprovalStatus
 from app.models.change_log import ChangeLog
 from app.models.competitor import Competitor
 from app.models.llm_usage import TokenUsageLog, LLMUsagePurpose
-from app.services.budget_service import check_budget
+from app.services.budget_service import check_budget, BudgetExceededError
 from app.services.llm.client import LLMClient
+from app.services.llm.factory import get_llm_client
 from app.services.llm.prompts import UNTRUSTED_CONTENT_PREAMBLE, wrap_untrusted
 
 __all__ = [
-    "get_or_create_battlecard", "draft_update_from_change_logs",
+    "get_or_create_battlecard", "draft_update_from_change_logs", "run_battlecard_update_job",
     "apply_approved_update", "BattlecardDraft", "NoMatchingChangeLogs",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 class NoMatchingChangeLogs(Exception):
@@ -143,6 +149,51 @@ def draft_update_from_change_logs(
     db.refresh(update)
 
     return update
+
+
+def run_battlecard_update_job(job_id: int) -> None:
+    """Runs draft_update_from_change_logs() for a queued BattlecardUpdateJob
+    and records the outcome on it. Called via FastAPI's BackgroundTasks (see
+    routers/battlecards.py), so it opens its own session rather than reusing
+    the request-scoped one, matching the pattern briefing_service.py uses
+    for out-of-request work.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(BattlecardUpdateJob).filter(BattlecardUpdateJob.id == job_id).first()
+        if job is None:
+            return
+
+        job.status = BattlecardUpdateJobStatus.running
+        db.commit()
+
+        try:
+            llm_client = get_llm_client()
+            if llm_client is None:
+                raise RuntimeError("No LLM is configured for this deployment")
+
+            update = draft_update_from_change_logs(
+                db, llm_client, job.workspace_id, job.competitor_id,
+                job.change_log_ids, created_by_user_id=job.created_by_user_id,
+            )
+            job.status = BattlecardUpdateJobStatus.success
+            job.battlecard_update_id = update.id
+        except (NoMatchingChangeLogs, BudgetExceededError, RuntimeError) as exc:
+            db.rollback()
+            job = db.query(BattlecardUpdateJob).filter(BattlecardUpdateJob.id == job_id).first()
+            job.status = BattlecardUpdateJobStatus.failed
+            job.error = str(exc)
+        except Exception:  # noqa: BLE001 — any unexpected failure must still resolve the job, not hang it
+            logger.exception("Battlecard update job %s failed unexpectedly", job_id)
+            db.rollback()
+            job = db.query(BattlecardUpdateJob).filter(BattlecardUpdateJob.id == job_id).first()
+            job.status = BattlecardUpdateJobStatus.failed
+            job.error = "Battlecard update generation failed unexpectedly"
+
+        job.finished_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
 
 
 def apply_approved_update(db: Session, battlecard_update: BattlecardUpdate) -> Battlecard:

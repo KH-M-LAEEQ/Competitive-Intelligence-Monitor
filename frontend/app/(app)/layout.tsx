@@ -3,6 +3,7 @@
 import { WorkspaceProvider, useWorkspaceContext } from "@/lib/workspace-context";
 import { ToastProvider } from "@/components/ui/Toast";
 import { BriefingJobsProvider } from "@/lib/briefing-jobs-context";
+import { BattlecardJobsProvider } from "@/lib/battlecard-jobs-context";
 import Sidebar from "@/components/shell/Sidebar";
 import Header from "@/components/shell/Header";
 
@@ -42,7 +43,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <WorkspaceProvider>
       <ToastProvider>
         <BriefingJobsProvider>
-          <Shell>{children}</Shell>
+          <BattlecardJobsProvider>
+            <Shell>{children}</Shell>
+          </BattlecardJobsProvider>
         </BriefingJobsProvider>
       </ToastProvider>
     </WorkspaceProvider>

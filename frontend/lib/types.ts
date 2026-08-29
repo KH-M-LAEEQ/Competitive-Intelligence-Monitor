@@ -161,6 +161,17 @@ export interface BattlecardUpdate {
   decided_at: string | null;
 }
 
+export type BattlecardUpdateJobStatus = "queued" | "running" | "success" | "failed";
+
+export interface BattlecardUpdateJob {
+  id: number;
+  status: BattlecardUpdateJobStatus;
+  battlecard_update_id: number | null;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
 export interface ResponseLibraryItem {
   id: number;
   workspace_id: number;

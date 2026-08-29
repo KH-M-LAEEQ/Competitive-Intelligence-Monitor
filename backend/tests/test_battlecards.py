@@ -1,6 +1,20 @@
 import app.routers.battlecards as battlecards_router
+import app.services.battlecard_service as battlecard_service
 from app.services.llm.client import LLMCallResult
 from app.services.battlecard_service import BattlecardDraft
+
+
+def _fake_battlecard_llm(monkeypatch, client=None):
+    # propose_update (router) checks get_llm_client() up front to reject
+    # with 400 before creating a job; run_battlecard_update_job (service,
+    # background task) resolves get_llm_client() again independently when it
+    # actually generates content. Each module bound its own name to the
+    # factory function at import time, so both need patching separately —
+    # patching only the router's leaves the background job calling the real
+    # (possibly live-configured) LLM.
+    fake = client or _FakeBattlecardLLMClient()
+    monkeypatch.setattr(battlecards_router, "get_llm_client", lambda: fake)
+    monkeypatch.setattr(battlecard_service, "get_llm_client", lambda: fake)
 
 
 class _FakeBattlecardLLMClient:
@@ -76,16 +90,27 @@ def test_get_battlecard_404_before_any_update(client, monkeypatch):
 def test_propose_and_approve_update_creates_and_bumps_battlecard(client, monkeypatch):
     owner_headers = _register_login(client, "owner@example.com")
     workspace, competitor, change_log_id = _seed_workspace_with_scored_change(client, owner_headers, monkeypatch)
-    monkeypatch.setattr(battlecards_router, "get_llm_client", lambda: _FakeBattlecardLLMClient())
+    _fake_battlecard_llm(monkeypatch)
 
     propose_res = client.post(
         f"/workspaces/{workspace['id']}/competitors/{competitor['id']}/battlecard/updates",
         json={"change_log_ids": [change_log_id]},
         headers=owner_headers,
     )
-    assert propose_res.status_code == 200
-    update = propose_res.json()
-    assert update["status"] == "pending"
+    assert propose_res.status_code == 202
+    job = propose_res.json()
+    assert job["status"] in ("queued", "running", "success")
+
+    # BackgroundTasks run after the response is sent, not necessarily
+    # resolved by the time propose_res.json() is parsed — a follow-up
+    # request gives the event loop a chance to finish it.
+    job_res = client.get(
+        f"/workspaces/{workspace['id']}/competitors/{competitor['id']}/battlecard/updates/jobs/{job['id']}",
+        headers=owner_headers,
+    )
+    assert job_res.status_code == 200
+    assert job_res.json()["status"] == "success"
+    assert job_res.json()["battlecard_update_id"] is not None
 
     approvals = client.get(
         f"/workspaces/{workspace['id']}/approvals/?status=pending", headers=owner_headers
@@ -113,7 +138,7 @@ def test_propose_and_approve_update_creates_and_bumps_battlecard(client, monkeyp
 def test_rejected_update_does_not_change_battlecard(client, monkeypatch):
     owner_headers = _register_login(client, "owner@example.com")
     workspace, competitor, change_log_id = _seed_workspace_with_scored_change(client, owner_headers, monkeypatch)
-    monkeypatch.setattr(battlecards_router, "get_llm_client", lambda: _FakeBattlecardLLMClient())
+    _fake_battlecard_llm(monkeypatch)
 
     client.post(
         f"/workspaces/{workspace['id']}/competitors/{competitor['id']}/battlecard/updates",
@@ -149,7 +174,7 @@ def test_second_update_bumps_version_again(client, monkeypatch):
     owner_headers = _register_login(client, "owner@example.com")
     workspace, competitor, change_log_id = _seed_workspace_with_scored_change(client, owner_headers, monkeypatch)
 
-    monkeypatch.setattr(battlecards_router, "get_llm_client", lambda: _FakeBattlecardLLMClient("first", "v1 content"))
+    _fake_battlecard_llm(monkeypatch, _FakeBattlecardLLMClient("first", "v1 content"))
     client.post(
         f"/workspaces/{workspace['id']}/competitors/{competitor['id']}/battlecard/updates",
         json={"change_log_ids": [change_log_id]}, headers=owner_headers,
@@ -161,7 +186,7 @@ def test_second_update_bumps_version_again(client, monkeypatch):
         f"/workspaces/{workspace['id']}/approvals/{approval_1['id']}/approve", json={}, headers=owner_headers
     )
 
-    monkeypatch.setattr(battlecards_router, "get_llm_client", lambda: _FakeBattlecardLLMClient("second", "v2 content"))
+    _fake_battlecard_llm(monkeypatch, _FakeBattlecardLLMClient("second", "v2 content"))
     client.post(
         f"/workspaces/{workspace['id']}/competitors/{competitor['id']}/battlecard/updates",
         json={"change_log_ids": [change_log_id]}, headers=owner_headers,

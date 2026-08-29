@@ -3,10 +3,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useWorkspaceContext } from "@/lib/workspace-context";
+import { useBattlecardJobs } from "@/lib/battlecard-jobs-context";
 import { Battlecard, ChangeLog, Competitor } from "@/lib/types";
 
 export default function BattlecardsPage() {
   const { workspaceId, ready: contextReady, canEdit } = useWorkspaceContext();
+  const { startBattlecardUpdateJob, activeCompetitorIds, completedCount } = useBattlecardJobs();
 
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
@@ -92,6 +94,11 @@ export default function BattlecardsPage() {
     });
   }
 
+  // Proposing a battlecard update runs as a background job (LLM generation
+  // can take a while) — this only dispatches it and clears the selection;
+  // the completedCount effect below reloads the battlecard once the job
+  // resolves, and activeCompetitorIds drives the "Generating..." state in
+  // the meantime.
   async function handlePropose(competitorId: number) {
     const changeLogIds = selected[competitorId] ?? [];
     if (!workspaceId || changeLogIds.length === 0) return;
@@ -99,18 +106,28 @@ export default function BattlecardsPage() {
     setProposing((prev) => ({ ...prev, [competitorId]: true }));
     setError(null);
     try {
-      await apiFetch(
-        `/workspaces/${workspaceId}/competitors/${competitorId}/battlecard/updates`,
-        { method: "POST", body: JSON.stringify({ change_log_ids: changeLogIds }) }
-      );
-      setSelected((prev) => ({ ...prev, [competitorId]: [] }));
-      await loadBattlecard(competitorId);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to propose update");
+      const ok = await startBattlecardUpdateJob({ competitorId, change_log_ids: changeLogIds });
+      if (ok) {
+        setSelected((prev) => ({ ...prev, [competitorId]: [] }));
+      } else {
+        setError("Failed to propose update");
+      }
     } finally {
       setProposing((prev) => ({ ...prev, [competitorId]: false }));
     }
   }
+
+  // A proposal job resolving (success or failure) means this competitor's
+  // battlecard may have a fresh pending update attached — refresh every
+  // expanded card so approval-queue state and the "Generating..." badge
+  // clear in sync.
+  useEffect(() => {
+    if (completedCount === 0) return;
+    Object.keys(expanded)
+      .filter((id) => expanded[Number(id)])
+      .forEach((id) => void loadBattlecard(Number(id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completedCount]);
 
   if (!contextReady || loading) return null;
 
@@ -204,10 +221,16 @@ export default function BattlecardsPage() {
                         )}
                         <button
                           onClick={() => handlePropose(c.id)}
-                          disabled={proposing[c.id] || selectedIds.length === 0}
+                          disabled={
+                            proposing[c.id] || activeCompetitorIds.includes(c.id) || selectedIds.length === 0
+                          }
                           className="h-8 w-fit rounded-lg bg-[var(--accent)] px-3 text-xs font-semibold text-[var(--accent-on)] disabled:opacity-50"
                         >
-                          {proposing[c.id] ? "Proposing..." : "Propose update"}
+                          {activeCompetitorIds.includes(c.id)
+                            ? "Generating..."
+                            : proposing[c.id]
+                              ? "Proposing..."
+                              : "Propose update"}
                         </button>
                       </div>
                     )}

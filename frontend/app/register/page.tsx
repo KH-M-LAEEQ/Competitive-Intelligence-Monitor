@@ -52,7 +52,7 @@ export default function RegisterPage() {
           </div>
           <div className="flex flex-col gap-0.5">
             <span className="text-[13px] font-semibold tracking-tight text-[var(--text-primary)]">
-              Sentry Signal
+              Intelligence Monitor
             </span>
             <span className="font-mono text-[9.5px] uppercase tracking-[.13em] text-[var(--text-dim)]">
               CI Monitor v1.0

@@ -1,19 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.competitor import Competitor
 from app.models.battlecard import Battlecard
 from app.models.battlecard_update import BattlecardUpdate
+from app.models.battlecard_update_job import BattlecardUpdateJob, BattlecardUpdateJobStatus
 from app.models.user import User
 from app.models.workspace_member import WorkspaceMember, WorkspaceRole
 from app.schemas.battlecard import (
-    ProposeBattlecardUpdateRequest, BattlecardResponse, BattlecardUpdateResponse
+    ProposeBattlecardUpdateRequest, BattlecardResponse, BattlecardUpdateResponse,
+    BattlecardUpdateJobResponse,
 )
 from app.dependencies import get_current_user, get_current_workspace, require_role, rate_limit
 from app.services.llm.factory import get_llm_client
-from app.services.battlecard_service import draft_update_from_change_logs, NoMatchingChangeLogs
-from app.services.budget_service import BudgetExceededError
+from app.services.battlecard_service import run_battlecard_update_job
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/competitors/{competitor_id}/battlecard",
@@ -58,12 +59,14 @@ def get_battlecard(
 
 @router.post(
     "/updates",
-    response_model=BattlecardUpdateResponse
+    response_model=BattlecardUpdateJobResponse,
+    status_code=202
 )
 def propose_update(
     workspace_id: int,
     competitor_id: int,
     payload: ProposeBattlecardUpdateRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     membership: WorkspaceMember = Depends(require_role(WorkspaceRole.owner, WorkspaceRole.editor)),
@@ -76,17 +79,48 @@ def propose_update(
     if llm_client is None:
         raise HTTPException(status_code=400, detail="No LLM is configured for this deployment")
 
-    try:
-        update = draft_update_from_change_logs(
-            db, llm_client, workspace_id, competitor_id,
-            payload.change_log_ids, created_by_user_id=current_user.id
-        )
-    except NoMatchingChangeLogs as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except BudgetExceededError as exc:
-        raise HTTPException(status_code=402, detail=str(exc))
+    job = BattlecardUpdateJob(
+        workspace_id=workspace_id,
+        competitor_id=competitor_id,
+        change_log_ids=payload.change_log_ids,
+        status=BattlecardUpdateJobStatus.queued,
+        created_by_user_id=current_user.id,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
 
-    return update
+    background_tasks.add_task(run_battlecard_update_job, job.id)
+
+    return job
+
+
+@router.get(
+    "/updates/jobs/{job_id}",
+    response_model=BattlecardUpdateJobResponse
+)
+def get_battlecard_update_job(
+    workspace_id: int,
+    competitor_id: int,
+    job_id: int,
+    db: Session = Depends(get_db),
+    membership: WorkspaceMember = Depends(get_current_workspace)
+):
+
+    job = (
+        db.query(BattlecardUpdateJob)
+        .filter(
+            BattlecardUpdateJob.id == job_id,
+            BattlecardUpdateJob.workspace_id == workspace_id,
+            BattlecardUpdateJob.competitor_id == competitor_id,
+        )
+        .first()
+    )
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Battlecard update job not found")
+
+    return job
 
 
 @router.get(

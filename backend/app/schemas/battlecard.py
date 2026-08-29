@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.models.approval_item import ApprovalStatus
+from app.models.battlecard_update_job import BattlecardUpdateJobStatus
 
 
 class ProposeBattlecardUpdateRequest(BaseModel):
@@ -30,6 +31,18 @@ class BattlecardUpdateResponse(BaseModel):
     status: ApprovalStatus
     created_at: datetime
     decided_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class BattlecardUpdateJobResponse(BaseModel):
+    id: int
+    status: BattlecardUpdateJobStatus
+    battlecard_update_id: int | None = None
+    error: str | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
 
     class Config:
         from_attributes = True

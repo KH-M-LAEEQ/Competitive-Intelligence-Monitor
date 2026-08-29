@@ -99,7 +99,7 @@ export default function Sidebar() {
           </div>
           {!collapsed && (
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="truncate text-[13px] font-semibold tracking-tight">Sentry Signal</span>
+              <span className="truncate text-[13px] font-semibold tracking-tight">Intelligence Monitor</span>
               <span className="truncate font-mono text-[9.5px] uppercase tracking-[.13em] text-[var(--text-dim)]">
                 CI Monitor v1.0
               </span>

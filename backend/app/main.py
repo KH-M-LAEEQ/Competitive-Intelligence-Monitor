@@ -13,6 +13,7 @@ from app.routers import briefings
 from app.routers import approvals
 from app.routers import audit
 from app.routers import battlecards
+from app.routers import battlecard_updates
 from app.routers import response_library
 from app.routers import integrations
 from app.routers import company_profiles
@@ -53,6 +54,7 @@ app.include_router(briefings.router)
 app.include_router(approvals.router)
 app.include_router(audit.router)
 app.include_router(battlecards.router)
+app.include_router(battlecard_updates.router)
 app.include_router(response_library.router)
 app.include_router(integrations.router)
 app.include_router(company_profiles.router)

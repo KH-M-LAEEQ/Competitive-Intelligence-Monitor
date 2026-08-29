@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useWorkspaceContext } from "@/lib/workspace-context";
-import { ApprovalItem, Briefing } from "@/lib/types";
+import { ApprovalItem, BattlecardUpdate, Briefing } from "@/lib/types";
 
 function relativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -26,6 +26,7 @@ export default function ApprovalsPage() {
 
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [briefingsById, setBriefingsById] = useState<Record<number, Briefing>>({});
+  const [battlecardUpdatesById, setBattlecardUpdatesById] = useState<Record<number, BattlecardUpdate>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<number, string>>({});
@@ -47,6 +48,16 @@ export default function ApprovalsPage() {
         byId[b.id] = b;
       });
       setBriefingsById(byId);
+
+      const battlecardUpdateItems = items.filter((i) => i.item_type === "battlecard_update");
+      const battlecardUpdates = await Promise.all(
+        battlecardUpdateItems.map((i) => apiFetch(`/workspaces/${wsId}/battlecard-updates/${i.item_id}`))
+      );
+      const updatesById: Record<number, BattlecardUpdate> = {};
+      battlecardUpdates.forEach((u: BattlecardUpdate) => {
+        updatesById[u.id] = u;
+      });
+      setBattlecardUpdatesById(updatesById);
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
     } finally {
@@ -99,6 +110,7 @@ export default function ApprovalsPage() {
         <div className="flex flex-col gap-[14px]">
           {approvals.map((item) => {
             const briefing = briefingsById[item.item_id];
+            const battlecardUpdate = battlecardUpdatesById[item.item_id];
             const outcome = decided[item.id];
 
             return (
@@ -112,12 +124,18 @@ export default function ApprovalsPage() {
                       {TYPE_LABELS[item.item_type] ?? item.item_type.toUpperCase()}
                     </span>
                     <span className="text-[14.5px] font-semibold tracking-tight">
-                      {briefing?.title ?? `Item #${item.item_id}`}
+                      {briefing?.title ??
+                        (battlecardUpdate ? "Battlecard update" : `Item #${item.item_id}`)}
                     </span>
                   </div>
                   {briefing && (
                     <span className="font-mono text-[11px] text-[var(--text-dim)]">
                       {briefing.audience} &middot; {briefing.digest_type}
+                    </span>
+                  )}
+                  {battlecardUpdate?.change_summary && (
+                    <span className="font-mono text-[11px] text-[var(--text-dim)]">
+                      {battlecardUpdate.change_summary}
                     </span>
                   )}
                 </div>
@@ -132,6 +150,10 @@ export default function ApprovalsPage() {
                   {briefing ? (
                     <p className="mt-2 whitespace-pre-wrap text-[13px] leading-[1.6] text-[var(--text-secondary)]">
                       {briefing.body_markdown}
+                    </p>
+                  ) : battlecardUpdate ? (
+                    <p className="mt-2 whitespace-pre-wrap text-[13px] leading-[1.6] text-[var(--text-secondary)]">
+                      {battlecardUpdate.proposed_content_markdown}
                     </p>
                   ) : (
                     <p className="mt-2 text-[13px] text-[var(--text-faint)]">

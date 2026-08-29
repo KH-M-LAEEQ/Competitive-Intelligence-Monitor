@@ -39,6 +39,17 @@ interface CheckRun {
   status: "running" | "success" | "failed";
 }
 
+// Own site has no user-facing "name" field (backend stores it as a hidden
+// competitor named "Your website") — derive something readable from the
+// URL instead so the prominent badge shows the actual site, not a label.
+function ownSiteDisplayName(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
 interface ComparisonRow {
   id: number;
   name: string;
@@ -123,7 +134,6 @@ export default function DashboardPage() {
       setApprovals(allApprovals);
       setBriefings(briefingList);
       setOwnSite(ownSiteData);
-      setOwnSiteUrl(ownSiteData?.url ?? "");
 
       if (ownSiteCompetitorId !== null) {
         try {
@@ -217,7 +227,7 @@ export default function DashboardPage() {
         body: JSON.stringify({ url: ownSiteUrl.trim() }),
       });
       setOwnSite(result);
-      setOwnSiteUrl(result.url);
+      setOwnSiteUrl("");
       await load(workspaceId);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to save your website");
@@ -392,11 +402,24 @@ export default function DashboardPage() {
             Add a homepage URL — pricing, blog, changelog and jobs pages are found automatically
           </span>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {ownSite && (
+            <Link
+              href={`/competitors/${ownSite.competitor_id}`}
+              className="rounded-lg border border-[var(--accent)] bg-[var(--accent-wash)] px-3 py-1.5 text-[14px] font-bold tracking-tight text-[var(--accent)] hover:brightness-110"
+            >
+              {ownSiteDisplayName(ownSite.url)}
+              <span className="ml-1.5 font-mono text-[9px] font-normal uppercase tracking-[.1em] opacity-70">
+                you
+              </span>
+            </Link>
+          )}
           {competitors.length === 0 ? (
-            <p className="text-sm text-[var(--text-faint)]">
-              No competitors yet — add one below to get started.
-            </p>
+            !ownSite && (
+              <p className="text-sm text-[var(--text-faint)]">
+                No competitors yet — add one below to get started.
+              </p>
+            )
           ) : (
             competitors.map((c) => (
               <Link
@@ -445,7 +468,7 @@ export default function DashboardPage() {
               <input
                 value={ownSiteUrl}
                 onChange={(e) => setOwnSiteUrl(e.target.value)}
-                placeholder="https://yourcompany.com"
+                placeholder={ownSite ? ownSite.url : "https://yourcompany.com"}
                 className="h-8 flex-1 max-w-xs rounded-lg border border-[var(--border-input)] bg-[var(--bg-input)] px-3 text-xs text-[var(--text-primary)]"
               />
               <button

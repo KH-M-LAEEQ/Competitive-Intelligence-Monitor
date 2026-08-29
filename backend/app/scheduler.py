@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -49,6 +50,22 @@ def run_scheduled_check(surface_id: int) -> None:
 def schedule_surface(surface: Surface) -> None:
     interval = _FREQUENCY_INTERVALS.get(surface.check_frequency, _FREQUENCY_INTERVALS["daily"])
 
+    # Anchor next_run_time off last_checked_at rather than letting
+    # IntervalTrigger default to "now" — this is a single-process, in-memory
+    # scheduler (see module docstring), so every app restart (every --reload
+    # in dev, every deploy) re-adds every surface's job from scratch. Without
+    # this, a restart happening more often than the check interval means the
+    # "next run" keeps getting pushed a full interval into the future and a
+    # surface's checks silently stop firing forever. If a check is already
+    # overdue, run it on the next tick instead of waiting out another full
+    # interval. Omit the kwarg entirely (rather than passing None) when
+    # there's no prior check yet — APScheduler treats an explicit
+    # next_run_time=None as "add this job paused," not "use the default."
+    next_run_kwargs = {}
+    if surface.last_checked_at is not None:
+        due = surface.last_checked_at + timedelta(**interval)
+        next_run_kwargs["next_run_time"] = max(due, datetime.utcnow())
+
     scheduler.add_job(
         run_scheduled_check,
         trigger=IntervalTrigger(**interval),
@@ -57,6 +74,7 @@ def schedule_surface(surface: Surface) -> None:
         replace_existing=True,
         misfire_grace_time=300,
         jitter=60,
+        **next_run_kwargs,
     )
 
 
